@@ -1,0 +1,78 @@
+# ===========================================
+# Python / Lekage Project .gitignore
+# ===========================================
+
+# ---- Python basics ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dll
+*.log
+
+# ---- Virtual environments ----
+.venv/
+venv/
+env/
+ENV/
+.venv.bak/
+pip-wheel-metadata/
+*.egg-info/
+.eggs/
+
+# ---- Jupyter / notebooks ----
+.ipynb_checkpoints/
+
+# ---- OS / editor files ----
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.bak
+.vscode/
+.idea/
+
+# ---- Build / distribution ----
+build/
+dist/
+*.spec
+
+# ---- Cache / temp ----
+*.tmp
+*.temp
+*.cache/
+__pycache__/
+pytest_cache/
+.mypy_cache/
+.pytest_cache/
+.cache/
+
+# ---- Generated visualizations ----
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.tiff
+*.mp4
+
+# ---- Simulation outputs ----
+*.dat
+*.txt
+*.csv
+*.out
+*.npy
+*.npz
+
+# ---- PyVista/Mayavi renders ----
+Veff_3D.png
+renders/
+screenshots/
+
+# ---- OS/terminal files ----
+*.log
+nohup.out
+
+# ---- User-specific ----
+*.local
+*.history
