@@ -9,7 +9,9 @@ Later will call the effective_barrier_potential() routine to compute V(x,y,z).
 import numpy as np
 from const.constants import q, eps0, eps_opt, eps_r
 import pyvista as pv
-
+from phy.phy import elastic_hopping_rate     
+import os, platform
+        
 
 class DielectricSlab:
     """
@@ -251,8 +253,278 @@ class DielectricSlab:
 
         # PyVista plot
         plotter = pv.Plotter()
-        plotter.add_volume(grid, scalars="V (eV)", cmap="inferno", opacity="sigmoid", shade=True)
-        plotter.add_axes()
-        plotter.add_text("3D Effective Potential (eV)", font_size=10)
+        opacity_values = [0.0, 0.02, 0.05, 0.12, 0.22, 0.35, 0.55, 0.8]
+
+        plotter.add_volume(
+            grid,
+            scalars="V (eV)",
+            cmap="plasma",
+            opacity=opacity_values,
+            shade=True,
+            scalar_bar_args={"title": "V (eV)"}
+        )
+
+        contours = grid.contour(isosurfaces=3)
+        plotter.add_mesh(contours, color="black", opacity=0.12)
+
+        plotter.set_background("white", top="lightblue")
         plotter.show_grid()
-        plotter.show()
+        plotter.add_axes()
+        plotter.add_text("Transparent 3D Potential Landscape", font_size=10)
+
+        plotter.show(screenshot="Veff_3D_whitebg.png")
+
+    def animate_hopping(self, n_steps=20, save_gif=True,
+                        localization_energy_eV=0.3,
+                        attempt_freq=1e13,
+                        color_map="coolwarm"):
+        """
+        Physically realistic hopping animation (elastic case).
+        Uses Mott’s distance-weighted rate:
+            R_ij = ν0 * exp(-2 * r_ij / r_D)
+        where r_D = ħ / sqrt(2 m* E_D), imported from phy.phy.
+
+        Parameters
+        ----------
+        n_steps : int
+            Number of hopping events to simulate.
+        save_gif : bool
+            Whether to save animation as GIF.
+        localization_energy_eV : float
+            Defect depth (E_D) in eV, sets localization radius.
+        attempt_freq : float
+            Attempt frequency (ν₀) in Hz.
+        color_map : str
+            Colormap for 3D visualization.
+        """
+        # --- renderer setup ---
+        if platform.system() == "Linux":
+            os.environ["VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN"] = "1"
+            os.environ["PYVISTA_OFF_SCREEN"] = "true"
+            offscreen = True
+        else:
+            offscreen = False
+
+        plotter = pv.Plotter(off_screen=offscreen, window_size=[800, 600])
+        plotter.set_background("white")
+        xs, ys, zs = self.x * 1e9, self.y * 1e9, self.z * 1e9
+        X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
+        grid = pv.StructuredGrid(X, Y, Z)
+        grid["V (eV)"] = (self.Veff / q).ravel(order="F")
+
+        # --- volume visualization setup ---
+        V_data = grid["V (eV)"]
+        vmin, vmax = np.percentile(V_data, [2, 98])
+        grid["V (eV)"] = np.clip(V_data, vmin, vmax)
+        opacity_values = [0.0, 0.0, 0.05, 0.15, 0.35, 0.55, 0.75, 0.85, 0.95, 1.0]
+
+        plotter.add_volume(
+            grid,
+            scalars="V (eV)",
+            cmap=color_map,
+            opacity=opacity_values,
+            shade=True,
+            scalar_bar_args={"title": "V (eV)", "color": "black"},
+        )
+        plotter.add_axes()
+        plotter.show_grid()
+
+        if save_gif:
+            plotter.open_gif("hopping_realistic.gif")
+
+        rng = np.random.default_rng()
+
+        # ensure occupancy array exists
+        if not hasattr(self, "defect_occupancy"):
+            self.defect_occupancy = np.ones(self.Nd, dtype=int)
+
+        print(f"[INFO] Elastic hopping with E_D = {localization_energy_eV} eV, ν₀ = {attempt_freq:.1e} Hz")
+
+        # --- main hopping loop ---
+        for step in range(n_steps):
+            occupied = np.where(self.defect_occupancy == 1)[0]
+            if len(occupied) == 0:
+                print("[INFO] No occupied defects left.")
+                break
+
+            # pick one occupied site
+            i = rng.choice(occupied)
+            r_i = self.defect_positions[i]
+
+            # compute hopping rates from defect i to all others
+            rates = np.array([
+                elastic_hopping_rate(r_i, r_j,
+                                    E_D=localization_energy_eV*q,
+                                    nu=attempt_freq)
+                for r_j in self.defect_positions
+            ])
+            rates[i] = 0.0  # no self-hop
+            P = rates / rates.sum()
+
+            # select target based on weighted probability
+            j = rng.choice(np.arange(self.Nd), p=P)
+            r_j = self.defect_positions[j]
+
+            # perform hop (updates occupancy & potential)
+            self.perform_hop(i, j)
+
+            # update visualization field
+            V_data = (self.Veff / q).ravel(order="F")
+            vmin, vmax = np.percentile(V_data, [2, 98])
+            grid["V (eV)"] = np.clip(V_data, vmin, vmax)
+
+            # draw transition line and spheres
+            line = pv.Line(r_i * 1e9, r_j * 1e9)
+            plotter.add_mesh(line, color="orange", line_width=6, opacity=0.9, lighting=False)
+            plotter.add_mesh(pv.Sphere(radius=0.2, center=r_i * 1e9), color="blue", opacity=0.9)
+            plotter.add_mesh(pv.Sphere(radius=0.2, center=r_j * 1e9), color="red", opacity=0.9)
+
+            # render and record
+            plotter.render()
+            if save_gif:
+                plotter.write_frame()
+
+            # reset scene
+            plotter.clear_actors()
+            plotter.add_volume(grid, scalars="V (eV)", cmap=color_map,
+                            opacity=opacity_values, shade=True)
+            plotter.add_axes()
+            plotter.show_grid()
+
+            print(f"[DEBUG] Hop {i}->{j} | r_ij={np.linalg.norm(r_i-r_j)*1e9:.2f} nm | Rate={rates[j]:.2e} s⁻¹")
+
+        if save_gif:
+            plotter.close()
+            print("[INFO] Saved 'hopping_realistic.gif'")
+        else:
+            plotter.show()
+
+
+    def animate_hopping2(self, n_steps=20, save_gif=True):
+        """
+        Visually exaggerated hopping animation (debug mode).
+        Shows large local potential changes and highlights hopping sites.
+        """
+        import pyvista as pv
+        import numpy as np
+        import os, platform
+        from const.constants import q
+
+        # --- detect OS and configure renderer ---
+        if platform.system() == "Linux":
+            os.environ["VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN"] = "1"
+            os.environ["PYVISTA_OFF_SCREEN"] = "true"
+            offscreen = True
+        else:
+            offscreen = False  # Windows/macOS use native OpenGL
+
+        print("[INFO] Launching exaggerated hopping animation...")
+
+        # --- setup grid ---
+        xs, ys, zs = self.x * 1e9, self.y * 1e9, self.z * 1e9
+        X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
+        grid = pv.StructuredGrid(X, Y, Z)
+        grid["V (eV)"] = (self.Veff / q).ravel(order="F")
+
+        # --- plot setup ---
+        plotter = pv.Plotter(off_screen=offscreen, window_size=[800, 600])
+        plotter.add_volume(grid, scalars="V (eV)", cmap="plasma",
+                        opacity="sigmoid", shade=True)
+        plotter.set_background("white")
+        plotter.add_axes()
+        plotter.show_grid()
+        plotter.add_text("Elastic Hopping (exaggerated)", font_size=12)
+
+        if save_gif:
+            plotter.open_gif("hopping_debug.gif")
+
+        # --- animation loop ---
+        for step in range(n_steps):
+            # pick occupied defect i and empty defect j
+            occupied = np.where(self.defect_occupancy == 1)[0]
+            empty = np.where(self.defect_occupancy == 0)[0]
+            if len(occupied) == 0 or len(empty) == 0:
+                print("[INFO] No available hops left.")
+                break
+            i = np.random.choice(occupied)
+            j = np.random.choice(empty)
+
+            # perform hop and recalc potential
+            self.perform_hop(i, j)
+
+            # update visualization
+            grid["V (eV)"] = (self.Veff / q).ravel(order="F")
+
+            # mark hopping sites
+            sphere_i = pv.Sphere(radius=0.2, center=self.defect_positions[i] * 1e9)
+            sphere_j = pv.Sphere(radius=0.2, center=self.defect_positions[j] * 1e9)
+            plotter.add_mesh(sphere_i, color="red", opacity=0.8)
+            plotter.add_mesh(sphere_j, color="blue", opacity=0.8)
+            plotter.add_text(f"Step {step+1}/{n_steps}: {i}→{j}", font_size=10)
+
+            if save_gif:
+                plotter.write_frame()
+            else:
+                plotter.render()
+
+            plotter.clear_actors()
+            plotter.add_volume(grid, scalars="V (eV)", cmap="plasma",
+                            opacity="sigmoid", shade=True)
+            plotter.add_axes()
+            plotter.show_grid()
+
+
+    # --------------------- elastic defect to defect -------------------------
+
+    def hopping_rate(self, i, j, E_D=0.3*q):
+        r_i = self.defect_positions[i]
+        r_j = self.defect_positions[j]
+        return elastic_defect_to_defect.elastic_hopping_rate(r_i, r_j, E_D=E_D)
+    
+    def update_potential_due_to_hop(self, i, j):
+        """
+        Recalculate electrostatic potential when an electron hops i -> j.
+        Removes Coulomb potential of defect i and adds potential of defect j.
+        """
+        import numpy as np
+        from const.constants import q, eps0
+
+        # charge magnitude
+        e = q
+        r_i = self.defect_positions[i]
+        r_j = self.defect_positions[j]
+
+        # 3D coordinate grids (m)
+        X, Y, Z = np.meshgrid(self.x, self.y, self.z, indexing="ij")
+
+        # distances
+        r_i_grid = np.sqrt((X - r_i[0])**2 + (Y - r_i[1])**2 + (Z - r_i[2])**2)
+        r_j_grid = np.sqrt((X - r_j[0])**2 + (Y - r_j[1])**2 + (Z - r_j[2])**2)
+
+        # avoid divide by zero
+        r_i_grid[r_i_grid < 1e-12] = 1e-12
+        r_j_grid[r_j_grid < 1e-12] = 1e-12
+
+        # change in potential due to hop
+        deltaV = (e / (4 * np.pi * eps0 * self.eps_r)) * (1 / r_j_grid - 1 / r_i_grid)
+
+        # update the potential grid
+        self.Veff += deltaV
+
+    def perform_hop(self, i, j):
+        """
+        Move one electron from defect i to j.
+        Update occupancies and potential.
+        """
+        if self.defect_occupancy[i] == 0:
+            print(f"[WARN] Defect {i} empty — skipping hop.")
+            return
+
+        # update occupancies
+        self.defect_occupancy[i] = 0
+        self.defect_occupancy[j] = 1
+
+        # update potential accordingly
+        self.update_potential_due_to_hop(i, j)
+
+    
