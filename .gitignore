@@ -52,7 +52,7 @@ pytest_cache/
 *.png
 *.jpg
 *.jpeg
-*.gif
+
 *.tiff
 *.mp4
 
