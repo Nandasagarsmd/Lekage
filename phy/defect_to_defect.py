@@ -1,5 +1,5 @@
 """
-for defect-based transport (elastic hopping, localization radius, etc.)
+for defect-based transport (elastic hopping, inelastic hopping, localization radius, etc.)
 """
 
 import numpy as np
@@ -39,3 +39,21 @@ def elastic_hopping_rate(r_i, r_j, E_D=0.3*q, nu=1e13):
     r_ij = np.linalg.norm(r_i - r_j)
     r_D = localization_radius(E_D)
     return nu * np.exp(-2 * r_ij / r_D)
+
+
+def inelastic_hopping_rate(r_i, r_j, E_i, E_j, E_D=0.3*q, nu=1e13, T=300):
+    """
+    Miller–Abrahams inelastic hopping rate
+    Eq. (3.45): R_ij = ν exp(-2r_ij/r_D) * exp(-ΔE/kT) if ΔE>0 else 1
+    """
+    k_B = 1.381e-23
+    r_ij = np.linalg.norm(r_i - r_j)
+    r_D = localization_radius(E_D)
+
+    base = nu * np.exp(-2 * r_ij / r_D)
+    ΔE = (E_j - E_i) * q  # convert eV → J
+    if ΔE > 0:
+        return base * np.exp(-ΔE / (k_B * T))
+    else:
+        return base
+

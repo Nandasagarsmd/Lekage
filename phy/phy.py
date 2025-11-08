@@ -1,1 +1,1 @@
-from .elastic_defect_to_defect import elastic_hopping_rate, localization_radius
+from .defect_to_defect import inelastic_hopping_rate, localization_radius

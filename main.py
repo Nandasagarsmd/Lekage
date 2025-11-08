@@ -15,24 +15,18 @@ def main():
     lx = 2.0       # slab thickness in nm
     ly = 5.0       # slab width in nm
     lz = 5.0       # slab height in nm
-    Nd = 30       # number of defects
-    bias_V = 600.0  # applied voltage across slab
+    Nd = 100       # number of defects
+    bias_V = 6.0  # applied voltage across slab
 
     # --- initialize the dielectric slab ---
     slab = DielectricSlab(lx_nm=lx, ly_nm=ly, lz_nm=lz, Nd=Nd)
     slab.summary()
 
     # --- compute and visualize static potential ---
+    slab = DielectricSlab()
     slab.compute_effective_potential(bias_V=bias_V)
-    slab.plot_defects()
-    slab.plot_potential_3d(downsample=1)
+    slab.animate_hopping_with_potential(n_steps=40,localization_energy_eV=0.05)
 
-    print(f"[INFO] Potential array shape: {slab.Veff.shape}")
-
-    # --- simulate elastic hopping and visualize evolution ---
-    print("\n[INFO] Starting elastic hopping animation...")
-    slab.animate_hopping(n_steps=40, save_gif=True)
-    print("[INFO] Animation complete. File saved as 'hopping_animation.gif'.")
 
 
 if __name__ == "__main__":
