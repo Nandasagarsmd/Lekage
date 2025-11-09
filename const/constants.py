@@ -13,7 +13,7 @@ eps0 = 8.8541878128e-12    # [F/m] vacuum permittivity
 me = 9.1093837015e-31      # [kg] electron rest mass
 c = 2.99792458e8           # [m/s] speed of light
 NA = 6.02214076e23         # [1/mol] Avogadro constant
-
+pi = 3.14159
 # ---------- Material / model defaults (tunable) ----------
 # Typical for high-κ dielectrics like HfO2 / ZrO2
 eps_opt = 4.0              # optical permittivity used in image potential (ε_opt)

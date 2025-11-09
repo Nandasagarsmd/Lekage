@@ -8,9 +8,10 @@ Later will call the effective_barrier_potential() routine to compute V(x,y,z).
 
 import numpy as np
 from const.constants import q, eps0, eps_opt, eps_r
-import pyvista as pv
-from phy.phy import inelastic_hopping_rate     
+#from phy.phy import inelastic_hopping_rate     
 import os, platform
+from logger.log import Logger
+from phy.phy import RateManager
         
 
 class DielectricSlab:
@@ -423,3 +424,95 @@ class DielectricSlab:
         )
 
         fig.show()
+
+    def run_kmc(self, t_stop=1e-6, sample_interval=1e-9,
+                temperature_K=300, bias_V=1.0):
+        """
+        Run kinetic Monte Carlo (kMC) simulation of leakage transport.
+
+        Parameters
+        ----------
+        t_stop : float
+            Simulation end time [s].
+        sample_interval : float
+            Sampling interval for current logging [s].
+        temperature_K : float
+            Temperature [K].
+        bias_V : float
+            Applied bias voltage [V].
+        """
+        print("[INFO] Starting kMC simulation...")
+
+        # --- setup logger ---
+        logger = Logger(filepath="output/log.txt")
+        logger.section("Kinetic Monte Carlo Simulation Started")
+        logger.write(f"[Setup] bias={bias_V:.2f} V, temperature={temperature_K} K, t_stop={t_stop:.2e}s")
+
+        # --- electric field and rate manager ---
+        F = bias_V / (self.lx if hasattr(self, "lx") else 2e-9)  # field [V/m]
+        rm = RateManager(field_Vpm=F, temperature_K=temperature_K, EB_eV=2.0)
+        logger.write(f"[Setup] Electric field = {F:.3e} V/m")
+
+        # --- initial defect occupancy (random 0/1) ---
+        defect_occ = np.random.choice([0, 1], size=self.Nd, p=[0.5, 0.5])
+        logger.write(f"[Setup] Initialized {defect_occ.sum()} / {self.Nd} occupied defects")
+
+        # --- simulation state variables ---
+        t = 0.0
+        total_transfers = 0
+        current_log = []  # to store time-current pairs
+
+        logger.section("Simulation Loop")
+
+        # --- main kinetic Monte Carlo loop ---
+        while t < t_stop:
+            events = rm.compute_events(
+                defect_positions=self.defect_positions,
+                defect_energies=self.defect_energies,
+                defect_occ=defect_occ
+            )
+
+            rates = np.array([ev["rate"] for ev in events])
+            total_rate = np.sum(rates)
+
+            if total_rate <= 1e-50 or np.isnan(total_rate):
+                logger.write("[WARN] No available transitions. Ending simulation.")
+                break
+
+            # generate random numbers for τ and event choice
+            r1, r2 = np.random.random(2)
+            tau = -np.log(r1) / total_rate
+            t += tau
+
+            # choose event by cumulative probability
+            chosen_idx = np.searchsorted(np.cumsum(rates / total_rate), r2)
+            chosen_event = events[chosen_idx]
+
+            # --- process chosen event ---
+            model = chosen_event["model"]
+            rate_val = chosen_event["rate"]
+
+            if "i" in chosen_event and "j" in chosen_event:
+                i, j = chosen_event["i"], chosen_event["j"]
+                if 0 <= i < self.Nd and 0 <= j < self.Nd:
+                    defect_occ[i], defect_occ[j] = 0, 1
+                logger.write(f"[Event] {model:>18s}: hop {i}->{j}, rate={rate_val:.3e}")
+            else:
+                logger.write(f"[Event] {model:>18s}: rate={rate_val:.3e}")
+
+            total_transfers += 1
+
+            # --- current sampling ---
+            if (t % sample_interval) < tau:
+                current = (total_transfers * q) / t if t > 0 else 0
+                current_log.append((t, current))
+                logger.write(f"[Sample] t={t:.3e}s | <I>={current*1e9:.3f} nA | occupied={defect_occ.sum()}")
+
+        # --- finalize ---
+        logger.section("Simulation Ended")
+        logger.write(f"Total simulated time: {t:.3e} s")
+        logger.write(f"Total events executed: {total_transfers}")
+        logger.write(f"Average current: {np.mean([c for _, c in current_log]):.3e} A")
+
+        logger.close()
+        print("[INFO] Simulation completed. Logs saved to output/log.txt.")
