@@ -1,42 +1,37 @@
+import datetime
 import os
-from datetime import datetime
 
 class Logger:
-    _instance = None
+    """
+    Simple timestamped file logger for simulation output.
+    Creates directories automatically and supports clean sections.
+    """
 
-    def __new__(cls, log_dir="output", filename="log.txt"):
-        if cls._instance is None:
-            cls._instance = super(Logger, cls).__new__(cls)
-            os.makedirs(log_dir, exist_ok=True)
-            cls._instance.path = os.path.join(log_dir, filename)
-            with open(cls._instance.path, "w") as f:
-                f.write(f"===== Simulation Log Started: {datetime.now()} =====\n\n")
-            cls._instance._indent = 0
-        return cls._instance
+    def __init__(self, filepath="output/log.txt"):
+        # ensure folder exists
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        self.filepath = filepath
+        self.file = open(filepath, "w", encoding="utf-8")
 
-    def _timestamp(self):
-        return datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        # initial header
+        start_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.file.write(f"=== Simulation Log Started @ {start_time} ===\n")
+        self.file.write("=" * 80 + "\n")
 
-    def write(self, msg, level=0):
-        """
-        Write a message with timestamp and indentation.
-        Example:
-            logger.write("Hopping rate = ...", level=1)
-        """
-        prefix = "    " * (self._indent + level)
-        line = f"[{self._timestamp()}] {prefix}{msg}"
-        with open(self.path, "a") as f:
-            f.write(line + "\n")
+    def write(self, text: str):
+        """Write one line with timestamp."""
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        self.file.write(f"[{timestamp}] {text}\n")
+        self.file.flush()
 
-    def section(self, title):
-        line = "=" * 80
-        with open(self.path, "a") as f:
-            f.write(f"\n{line}\n>>> {title}\n{line}\n")
+    def section(self, title: str):
+        """Write a visually separated section header."""
+        self.file.write("\n" + "=" * 80 + "\n")
+        self.file.write(f"### {title}\n")
+        self.file.write("=" * 80 + "\n")
 
-    def push(self):
-        """Increase indentation level."""
-        self._indent += 1
-
-    def pop(self):
-        """Decrease indentation level (never below 0)."""
-        self._indent = max(0, self._indent - 1)
+    def close(self):
+        """Close the file properly."""
+        end_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.file.write(f"\n=== Simulation Ended @ {end_time} ===\n")
+        self.file.close()

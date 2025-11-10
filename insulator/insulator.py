@@ -4,6 +4,7 @@ insulator.py
 Defines the dielectric slab geometry and defect (trap) distribution.
 Imports physical constants from const/constants.py.
 Later will call the effective_barrier_potential() routine to compute V(x,y,z).
+## Logging only 5 events for now
 """
 
 import numpy as np
@@ -450,7 +451,7 @@ class DielectricSlab:
 
         # --- electric field and rate manager ---
         F = bias_V / (self.lx if hasattr(self, "lx") else 2e-9)  # field [V/m]
-        rm = RateManager(field_Vpm=F, temperature_K=temperature_K, EB_eV=2.0)
+        rm = RateManager(field_Vpm=F, temperature_K=temperature_K, EB_eV=2.0, logger=logger, max_log_events=5 )
         logger.write(f"[Setup] Electric field = {F:.3e} V/m")
 
         # --- initial defect occupancy (random 0/1) ---
@@ -491,22 +492,38 @@ class DielectricSlab:
             # --- process chosen event ---
             model = chosen_event["model"]
             rate_val = chosen_event["rate"]
+            i = chosen_event.get("i")
+            j = chosen_event.get("j")
 
-            if "i" in chosen_event and "j" in chosen_event:
-                i, j = chosen_event["i"], chosen_event["j"]
-                if 0 <= i < self.Nd and 0 <= j < self.Nd:
-                    defect_occ[i], defect_occ[j] = 0, 1
-                logger.write(f"[Event] {model:>18s}: hop {i}->{j}, rate={rate_val:.3e}")
+            # Handle according to event type safely
+            if isinstance(i, int) and isinstance(j, int):
+                # defect → defect hop
+                defect_occ[i], defect_occ[j] = 0, 1
+                logger.write(f"[Event] {model:>16s}: hop {i}->{j}, rate={rate_val:.3e}")
+
+            elif i == "electrode" and isinstance(j, int):
+                # injection into defect
+                defect_occ[j] = 1
+                logger.write(f"[Event] {model:>16s}: inject electrode→{j}, rate={rate_val:.3e}")
+
+            elif isinstance(i, int) and j == "electrode":
+                # emission to electrode
+                defect_occ[i] = 0
+                logger.write(f"[Event] {model:>16s}: emit {i}→electrode, rate={rate_val:.3e}")
+
+            elif isinstance(i, int) and j == "CB":
+                # Poole–Frenkel emission
+                defect_occ[i] = 0
+                logger.write(f"[Event] {model:>16s}: PF {i}→CB, rate={rate_val:.3e}")
+
+            elif i == "electrode" and j == "electrode*":
+                # direct tunneling channel
+                logger.write(f"[Event] {model:>16s}: direct tunneling event, rate={rate_val:.3e}")
+
             else:
-                logger.write(f"[Event] {model:>18s}: rate={rate_val:.3e}")
+                # Unknown / fallback
+                logger.write(f"[WARN] Unhandled event type: {chosen_event}")
 
-            total_transfers += 1
-
-            # --- current sampling ---
-            if (t % sample_interval) < tau:
-                current = (total_transfers * q) / t if t > 0 else 0
-                current_log.append((t, current))
-                logger.write(f"[Sample] t={t:.3e}s | <I>={current*1e9:.3f} nA | occupied={defect_occ.sum()}")
 
         # --- finalize ---
         logger.section("Simulation Ended")

@@ -18,7 +18,7 @@ class RateManager:
     def __init__(self, field_Vpm, temperature_K=300.0,
                  EB_eV=1.0, eps_r=5.6, area_per_site_m2=1e-18,
                  hopping_model="MA", nu0=1e13,
-                 enable_pf=True, enable_direct=False):
+                 enable_pf=True, enable_direct=False, logger=None, max_log_events=5):
         """
         Parameters
         ----------
@@ -50,79 +50,114 @@ class RateManager:
         self.nu0 = nu0
         self.enable_pf = enable_pf
         self.enable_direct = enable_direct
-        self.logger = Logger()
+        self.logger = logger or Logger()
+        self.max_log_events = max_log_events
 
-    def compute_events(self, defect_pos_m, defect_E_eV, occupancy, Ef_eV=0.0):
+    def compute_events(self, defect_positions, defect_energies, defect_occ, Ef_eV=0.0):
         """
-        Build the list of all candidate transitions with rates.
+        Build and log all possible charge transport transitions.
 
         Parameters
         ----------
-        defect_pos_m : (N,3) array
-        defect_E_eV  : (N,) array
-        occupancy    : (N,) array of {0,1}
-        Ef_eV        : electrode Fermi level [eV] (reference 0 by default)
+        defect_positions : (N,3) array
+            Positions of traps [m].
+        defect_energies  : (N,) array
+            Trap depths [eV].
+        defect_occ       : (N,) array of {0,1}
+            1 = occupied, 0 = empty.
+        Ef_eV            : float
+            Fermi level [eV].
 
         Returns
         -------
         events : list of dict
-            Each dict: { 'i': idx or 'electrode',
-                         'j': idx or 'electrode' or 'CB',
-                         'type': str,
-                         'rate': float }
+            Each dict = {i, j, type, model, rate}
         """
-        N = len(defect_pos_m)
+        N = len(defect_positions)
         events = []
 
-        # -------- defect -> defect hopping --------
-        occ_idx = np.where(occupancy == 1)[0]
-        emp_idx = np.where(occupancy == 0)[0]
+        # -------- defect → defect hopping --------
+        occ_idx = np.where(defect_occ == 1)[0]
+        emp_idx = np.where(defect_occ == 0)[0]
+
         for i in occ_idx:
-            ri = defect_pos_m[i]
-            Ei = defect_E_eV[i]
-            # hops only to empty traps
+            ri = defect_positions[i]
+            Ei = defect_energies[i]
             for j in emp_idx:
                 if j == i:
                     continue
-                rj = defect_pos_m[j]
-                Ej = defect_E_eV[j]
+                rj = defect_positions[j]
+                Ej = defect_energies[j]
                 R = hopping_rate(ri, rj, Ei, Ej, T_K=self.T,
-                                 model=self.hopping_model, nu0=self.nu0)
-                if R > 0.0:
-                    events.append({'i': i, 'j': j, 'type': 'hop', 'rate': R})
+                                model=self.hopping_model, nu0=self.nu0)
+                if np.isfinite(R) and R > 0.0:
+                    events.append({
+                        'i': i, 'j': j,
+                        'type': 'hop',
+                        'model': 'hopping',
+                        'rate': R
+                    })
 
-        # -------- electrode -> defect (injection) --------
+        # -------- electrode → defect (injection) --------
         for j in emp_idx:
-            Ej = defect_E_eV[j]
+            Ej = defect_energies[j]
             Rinj = injection_rate(E_D_eV=Ej, F=self.F, T_K=self.T,
-                                  Ef_eV=Ef_eV, EB_eV=self.EB_eV, eps_r=self.eps_r)
-            if Rinj > 0.0:
-                events.append({'i': 'electrode', 'j': j, 'type': 'inject', 'rate': Rinj})
+                                Ef_eV=Ef_eV, EB_eV=self.EB_eV, eps_r=self.eps_r)
+            if np.isfinite(Rinj) and Rinj > 0.0:
+                events.append({
+                    'i': 'electrode', 'j': j,
+                    'type': 'inject',
+                    'model': 'injection',
+                    'rate': Rinj
+                })
 
-        # -------- defect -> electrode (emission) --------
+        # -------- defect → electrode (emission) --------
         for i in occ_idx:
-            Ei = defect_E_eV[i]
+            Ei = defect_energies[i]
             Remit = emission_rate(E_D_eV=Ei, F=self.F, T_K=self.T,
-                                  Ef_eV=Ef_eV, EB_eV=self.EB_eV, eps_r=self.eps_r)
-            if Remit > 0.0:
-                events.append({'i': i, 'j': 'electrode', 'type': 'emit', 'rate': Remit})
+                                Ef_eV=Ef_eV, EB_eV=self.EB_eV, eps_r=self.eps_r)
+            if np.isfinite(Remit) and Remit > 0.0:
+                events.append({
+                    'i': i, 'j': 'electrode',
+                    'type': 'emit',
+                    'model': 'emission',
+                    'rate': Remit
+                })
 
-        # -------- PF emission (trap -> CB) --------
+        # -------- Poole–Frenkel emission (trap → CB) --------
         if self.enable_pf:
             for i in occ_idx:
-                Ei = defect_E_eV[i]  # treat as trap depth to CB
+                Ei = defect_energies[i]
                 Rpf = poole_frenkel_rate(E_T_eV=Ei, F_Vpm=self.F,
-                                         T_K=self.T, eps_r=self.eps_r, nu0=self.nu0)
-                if Rpf > 0.0:
-                    events.append({'i': i, 'j': 'CB', 'type': 'pf', 'rate': Rpf})
+                                        T_K=self.T, eps_r=self.eps_r, nu0=self.nu0)
+                if np.isfinite(Rpf) and Rpf > 0.0:
+                    events.append({
+                        'i': i, 'j': 'CB',
+                        'type': 'pf',
+                        'model': 'poole_frenkel',
+                        'rate': Rpf
+                    })
 
-        # -------- optional: direct tunneling channel (global) --------
+        # -------- optional: direct tunneling (electrode → electrode) --------
         if self.enable_direct:
             Rdir = direct_tunneling_rate(self.F, self.T, self.EB_eV,
-                                         eps_r=self.eps_r, A_cell=self.A_cell, mode='auto')
-            if Rdir > 0.0:
-                # Represent as a global event (not tied to a specific defect)
-                events.append({'i': 'electrode', 'j': 'electrode*', 'type': 'direct', 'rate': Rdir})
+                                        eps_r=self.eps_r, A_cell=self.A_cell, mode='auto')
+            if np.isfinite(Rdir) and Rdir > 0.0:
+                events.append({
+                    'i': 'electrode', 'j': 'electrode*',
+                    'type': 'direct',
+                    'model': 'direct_tunneling',
+                    'rate': Rdir
+                })
+
+        # --- Logging summary ---
+        self.logger.section("Transition Generation Summary")
+        self.logger.write(f"[RateManager] Computed {len(events)} total transitions.")
+        limit = None if self.max_log_events is None else self.max_log_events
+        for e in (events if limit is None else events[:limit]):
+            self.logger.write(
+                f"[Sample] {e['model']:<16s} | type={e['type']:<8s} | rate={e['rate']:.3e}"
+            )
 
         return events
 
@@ -146,7 +181,7 @@ class RateManager:
         idx = int(np.searchsorted(cum, r2))
         return events[idx], tau, Rtot
 
-    def compute_events(self, defect_positions, defect_energies, defect_occ):
+ 
         """
         Accumulate all possible transitions between defects
         and between defects ↔ electrodes, log neatly.
