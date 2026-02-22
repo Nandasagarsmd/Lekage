@@ -36,7 +36,7 @@ def main():
     # --- Compute static potential landscape ---
     slab.compute_effective_potential(bias_V=bias_V, EB_eV=EB_eV)
 
-    # --- Run the kinetic Monte Carlo transport simulation ---
+    # --- kinetic Monte Carlo transport simulation ---
     slab.run_kmc(
         t_stop=t_stop,
         sample_interval=sample_interval,
